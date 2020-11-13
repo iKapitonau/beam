@@ -1098,6 +1098,7 @@ namespace beam::wallet
 
     void Wallet::OnRequestComplete(MyRequestEvents& r)
     {
+        LOG_INFO() << "OnRequestComplete(MyRequestEvents";
         struct MyParser
             :public proto::Event::IGroupParser
         {

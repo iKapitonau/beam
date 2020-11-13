@@ -997,17 +997,21 @@ Event::Type::Enum Event::Type::Load(Deserializer& der)
 {
     Type::Enum eType;
     auto bytesLeft = der.bytes_left();
+    LOG_INFO() << "Event::Type::Load  bytesLeft=" << bytesLeft;
     try
     {
         der& eType;
+        LOG_INFO() << "Event::Type::Load  done";
     }
-    catch (const std::exception&)
+    catch (const std::exception& ex)
     {
+        LOG_INFO() << "Event::Type::Load  ex=" << ex.what();
         // workaround for the case whe enum was serialized as unsigned integer #1622
         // TODO: remove after fork
         while (der.bytes_left() < bytesLeft)
             der.ungetch();
 
+        LOG_INFO() << "Event::Type::Load  der.bytes_left()=" << der.bytes_left();
         enum Enum2 : int32_t {
 #define THE_MACRO(id, name) name = id,
             BeamEventsAll(THE_MACRO)
@@ -1017,6 +1021,7 @@ Event::Type::Enum Event::Type::Load(Deserializer& der)
         der& eType2;
         eType = static_cast<Type::Enum>(eType2);
     }
+    LOG_INFO() << "Event::Type::Load  eType=" << eType;
     return eType;
 }
 

@@ -2757,7 +2757,7 @@ int main()
     Rules::get().UpdateChecksum();
 
     storage::HookErrors();
-    //TestTxList();
+    TestTxList();
     TestKeyKeeper();
 
     TestVouchers();

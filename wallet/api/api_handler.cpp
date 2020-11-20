@@ -839,42 +839,46 @@ namespace beam::wallet
             res.resultList.reserve(data.count);
             size_t offset = 0;
             size_t counter = 0;
-            walletDB->visitTx([&](const auto& tx)
+            walletDB->visitTx([&](TxType type, TxStatus status)
             {
-                if (tx.m_txType != TxType::Simple 
-                 && tx.m_txType != TxType::AssetIssue
-                 && tx.m_txType != TxType::AssetConsume
-                 && tx.m_txType != TxType::AssetInfo)
+                if (type != TxType::Simple
+                    && type != TxType::AssetIssue
+                    && type != TxType::AssetConsume
+                    && type != TxType::AssetInfo)
                 {
-                    return true;
+                    return false;
                 }
 
-                if (!data.withAssets && 
-                    (tx.m_assetId != Asset::s_InvalidID || tx.m_txType != TxType::Simple))
+                if (data.filter.status && status != *data.filter.status)
                 {
-                    return true;
-                }
-
-                if (data.filter.assetId && tx.m_assetId != *data.filter.assetId)
-                {
-                    return true;
-                }
-
-                if (data.filter.status && tx.m_status != *data.filter.status)
-                {
-                    return true;
-                }
-
-                const auto height = storage::DeduceTxProofHeight(*walletDB, tx);
-                if (data.filter.height && height != *data.filter.height)
-                {
-                    return true;
+                    return false;
                 }
 
                 ++offset;
                 if (offset <= data.skip)
                 {
-                    return true;
+                    return false;
+                }
+
+                ++counter;
+                return data.count == 0 || counter <= data.count;
+            }, 
+            [&](const auto& tx)
+            {
+                if (!data.withAssets && (tx.m_assetId != Asset::s_InvalidID || tx.m_txType != TxType::Simple))
+                {
+                    return;
+                }
+
+                if (data.filter.assetId && tx.m_assetId != *data.filter.assetId)
+                {
+                    return;
+                }
+
+                const auto height = storage::DeduceTxProofHeight(*walletDB, tx);
+                if (data.filter.height && height != *data.filter.height)
+                {
+                    return;
                 }
 
                 Status::Response& item = res.resultList.emplace_back();
@@ -882,9 +886,6 @@ namespace beam::wallet
                 item.txHeight = height;
                 item.systemHeight = stateID.m_Height;
                 item.confirmations = 0;
-
-                ++counter;
-                return data.count == 0 || counter < data.count;
             });
 
             std::sort(res.resultList.begin(), res.resultList.end(), [](const auto& a, const auto& b)

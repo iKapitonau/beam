@@ -412,6 +412,7 @@ namespace beam::wallet
 
         // /////////////////////////////////////////////
         // Transaction management
+        virtual void visitTx(std::function<bool(const TxDescription&)> func) const = 0;
         virtual std::vector<TxDescription> getTxHistory(wallet::TxType txType = wallet::TxType::Simple, uint64_t start = 0, int count = std::numeric_limits<int>::max()) const = 0;
         virtual boost::optional<TxDescription> getTx(const TxID& txId) const = 0;
         virtual void saveTx(const TxDescription& p) = 0;
@@ -557,6 +558,7 @@ namespace beam::wallet
         void saveShieldedCoin(const ShieldedCoin& shieldedCoin) override;
         void rollbackConfirmedShieldedUtxo(Height minHeight) override;
 
+        void visitTx(std::function<bool(const TxDescription&)> func) const override;
         std::vector<TxDescription> getTxHistory(wallet::TxType txType, uint64_t start, int count) const override;
         boost::optional<TxDescription> getTx(const TxID& txId) const override;
         void saveTx(const TxDescription& p) override;
@@ -661,6 +663,7 @@ namespace beam::wallet
         void onFlushTimer();
         void onPrepareToModify();
         void MigrateCoins();
+        boost::optional<TxDescription> getTxImpl(const TxID& txId, sqlite::Statement& stm) const;
     private:
         friend struct sqlite::Statement;
         bool m_Initialized = false;

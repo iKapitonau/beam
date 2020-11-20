@@ -758,11 +758,11 @@ namespace beam::wallet
         doResponse(id, response);
     }
 
-    void WalletApiHandler::onMessage(const JsonRpcId& id, const WalletStatus& data)
+    void WalletApiHandler::onMessage(const JsonRpcId& id, const GetWalletStatus& data)
     {
         LOG_DEBUG() << "WalletStatus(id = " << id << ")";
 
-        WalletStatus::Response response;
+        GetWalletStatus::Response response;
         auto walletDB = _walletData.getWalletDB();
 
         {
@@ -833,59 +833,66 @@ namespace beam::wallet
 
         {
             auto walletDB = _walletData.getWalletDB();
-            auto txList = walletDB->getTxHistory(TxType::Simple);
-
-            if (data.withAssets)
-            {
-                auto txIssue = walletDB->getTxHistory(TxType::AssetIssue);
-                auto txConsume = walletDB->getTxHistory(TxType::AssetConsume);
-                auto txInfo = walletDB->getTxHistory(TxType::AssetInfo);
-
-                txList.insert(txList.end(), txIssue.begin(), txIssue.end());
-                txList.insert(txList.end(), txConsume.begin(), txConsume.end());
-                txList.insert(txList.end(), txInfo.begin(), txInfo.end());
-            }
-
-            std::sort(txList.begin(), txList.end(), [](const TxDescription& a, const TxDescription& b) -> bool {
-                return a.m_minHeight > b.m_minHeight;
-             });
 
             Block::SystemState::ID stateID = {};
             _walletData.getWalletDB()->getSystemStateID(stateID);
-
-            for (const auto& tx : txList)
+            res.resultList.reserve(data.count);
+            size_t offset = 0;
+            size_t counter = 0;
+            walletDB->visitTx([&](const auto& tx)
             {
-                if (!data.withAssets && tx.m_assetId != Asset::s_InvalidID)
+                if (tx.m_txType != TxType::Simple 
+                 && tx.m_txType != TxType::AssetIssue
+                 && tx.m_txType != TxType::AssetConsume
+                 && tx.m_txType != TxType::AssetInfo)
                 {
-                    continue;
+                    return true;
+                }
+
+                if (!data.withAssets && 
+                    (tx.m_assetId != Asset::s_InvalidID || tx.m_txType != TxType::Simple))
+                {
+                    return true;
                 }
 
                 if (data.filter.assetId && tx.m_assetId != *data.filter.assetId)
                 {
-                    continue;
+                    return true;
                 }
 
                 if (data.filter.status && tx.m_status != *data.filter.status)
                 {
-                    continue;
+                    return true;
                 }
 
                 const auto height = storage::DeduceTxProofHeight(*walletDB, tx);
                 if (data.filter.height && height != *data.filter.height)
                 {
-                    continue;
+                    return true;
                 }
 
-                Status::Response item;
+                ++offset;
+                if (offset <= data.skip)
+                {
+                    return true;
+                }
+
+                Status::Response& item = res.resultList.emplace_back();
                 item.tx = tx;
                 item.txHeight = height;
                 item.systemHeight = stateID.m_Height;
                 item.confirmations = 0;
-                res.resultList.push_back(item);
-            }
+
+                ++counter;
+                return data.count == 0 || counter < data.count;
+            });
+
+            std::sort(res.resultList.begin(), res.resultList.end(), [](const auto& a, const auto& b)
+            {
+                return a.tx.m_minHeight > b.tx.m_minHeight;
+            });
         }
 
-        doPagination(data.skip, data.count, res.resultList);
         doResponse(id, res);
     }
 

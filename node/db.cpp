@@ -15,6 +15,7 @@
 #include "db.h"
 #include "../core/peer_manager.h"
 #include "../utility/logger.h"
+#include <algorithm>
 
 namespace beam {
 

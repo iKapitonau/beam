@@ -29,6 +29,7 @@
 #include "keykeeper/local_private_key_keeper.h"
 #include "strings_resources.h"
 #include "core/uintBig.h"
+#include <queue>
 
 #define NOSEP
 #define COMMA ", "
@@ -1113,11 +1114,20 @@ namespace beam::wallet
             throwIfError(ret, db);
         }
 
+        void CreateTxParamsIndex(sqlite3* db)
+        {
+            const char* req = "CREATE INDEX IF NOT EXISTS TxParamsIndex ON " TX_PARAMS_NAME " (txID,subTxID,paramID);"
+                              "CREATE INDEX IF NOT EXISTS TxParamsValueIndex ON " TX_PARAMS_NAME " (paramID,subTxID,value);";
+            int ret = sqlite3_exec(db, req, nullptr, nullptr, nullptr);
+            throwIfError(ret, db);
+        }
+
         void CreateTxParamsTable(sqlite3* db)
         {
             const char* req = "CREATE TABLE " TX_PARAMS_NAME " (" ENUM_TX_PARAMS_FIELDS(LIST_WITH_TYPES, COMMA, ) ", PRIMARY KEY (txID, subTxID, paramID)) WITHOUT ROWID;";
             int ret = sqlite3_exec(db, req, nullptr, nullptr, nullptr);
             throwIfError(ret, db);
+            CreateTxParamsIndex(db);
         }
 
         void CreateStatesTable(sqlite3* db)
@@ -1847,6 +1857,7 @@ namespace beam::wallet
                     // no break
 
                 case DbVersion:
+                    CreateTxParamsIndex(walletDB->_db);
                     // drop private variables from public database for cold wallet
                     if (separateDBForPrivateData && !DropPrivateVariablesFromPublicDatabase(*walletDB))
                     {
@@ -3178,6 +3189,37 @@ namespace beam::wallet
         notifyShieldedCoinsChanged(ChangeAction::Updated, v);
     }
 
+    void WalletDB::visitTx(std::function<bool(TxType, TxStatus)> filter, std::function<void(const TxDescription&)> func) const
+    {
+        sqlite::Statement stm(this, "SELECT txID FROM " TX_PARAMS_NAME " WHERE paramID=?1 AND subTxID=?2 ORDER BY value DESC;");
+        stm.bind(1, TxParameterID::CreateTime);
+        stm.bind(2, kDefaultSubTxID);
+
+        const char* gtParamReq = "SELECT * FROM " TX_PARAMS_NAME " WHERE txID=?1;";
+        sqlite::Statement stm2(this, gtParamReq);
+        sqlite::Statement stm3(this, "SELECT * FROM " TX_PARAMS_NAME " WHERE txID=?1 AND subTxID=?2 AND paramID=?3;");
+
+        while (stm.step())
+        {
+            TxID txID;
+            stm.get(0, txID);
+            TxType type;
+            TxStatus status;
+            if (!getTxParameterImpl(txID, kDefaultSubTxID, TxParameterID::TransactionType, type, stm3) ||
+                !getTxParameterImpl(txID, kDefaultSubTxID, TxParameterID::Status, status, stm3) ||
+                !filter(type, status))
+            {
+                continue;
+            }
+
+            auto t = getTxImpl(txID, stm2);
+            if (t.is_initialized())
+            {
+                func(*t);
+            }
+        }
+    }
+
     vector<TxDescription> WalletDB::getTxHistory(wallet::TxType txType, uint64_t start, int count) const
     {
         // TODO this is temporary solution
@@ -3225,11 +3267,14 @@ namespace beam::wallet
                 stm.bind(4, typeBlob);
             }
 
+            const char* gtParamReq = "SELECT * FROM " TX_PARAMS_NAME " WHERE txID=?1;";
+            sqlite::Statement stm2(this, gtParamReq);
+
             while (stm.step())
             {
                 TxID txID;
                 stm.get(0, txID);
-                auto t = getTx(txID);
+                auto t = getTxImpl(txID, stm2);
                 if (t.is_initialized())
                 {
                     res.emplace_back(*t);
@@ -3246,10 +3291,20 @@ namespace beam::wallet
         // load only simple TX that supported by TxDescription
         const char* req = "SELECT * FROM " TX_PARAMS_NAME " WHERE txID=?1;";
         sqlite::Statement stm(this, req);
+        return getTxImpl(txId, stm);
+    }
+
+    boost::optional<TxDescription> WalletDB::getTxImpl(const TxID& txId, sqlite::Statement& stm) const
+    {
+        stm.Reset();
         stm.bind(1, txId);
 
         TxDescription txDescription(txId);
-        std::set<TxParameterID> gottenParams;
+        struct Set : public std::priority_queue<TxParameterID, std::vector<TxParameterID>, std::greater<TxParameterID> >
+        {
+            container_type::const_iterator begin() const noexcept { return c.begin(); }
+            container_type::const_iterator end() const noexcept { return c.end(); }
+        } gottenParams;
 
         while (stm.step())
         {
@@ -3258,7 +3313,7 @@ namespace beam::wallet
             ENUM_TX_PARAMS_FIELDS(STM_GET_LIST, NOSEP, parameter);
             auto parameterID = static_cast<TxParameterID>(parameter.m_paramID);
 
-            txDescription.SetParameter(parameterID, parameter.m_value, static_cast<SubTxID>(parameter.m_subTxID));
+            txDescription.SetParameter(parameterID, std::move(parameter.m_value), static_cast<SubTxID>(parameter.m_subTxID));
 
             if (parameter.m_subTxID == kDefaultSubTxID)
             {
@@ -4153,7 +4208,12 @@ namespace beam::wallet
         }
 
         sqlite::Statement stm(this, "SELECT * FROM " TX_PARAMS_NAME " WHERE txID=?1 AND subTxID=?2 AND paramID=?3;");
+        return getTxParameterImpl(txID, subTxID, paramID, blob, stm);
+    }
 
+    bool WalletDB::getTxParameterImpl(const TxID& txID, SubTxID subTxID, TxParameterID paramID, ByteBuffer& blob, sqlite::Statement& stm) const
+    {
+        stm.Reset();
         stm.bind(1, txID);
         stm.bind(2, subTxID);
         stm.bind(3, paramID);

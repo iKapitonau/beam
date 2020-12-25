@@ -220,6 +220,20 @@ namespace beam::wallet
         ByteBuffer m_Message;
     };
 
+#define BEAM_TX_LIST_FILTER_MAP(MACRO) \
+    MACRO(TransactionType,      TxType) \
+    MACRO(Status,               TxStatus) \
+    MACRO(AssetID,              Asset::ID) \
+    MACRO(AssetConfirmedHeight, Height) \
+    MACRO(KernelProofHeight,    Height) 
+
+    struct TxListFilter
+    {
+#define MACRO(id, type) boost::optional<type> m_##id;
+        BEAM_TX_LIST_FILTER_MAP(MACRO)
+#undef MACRO
+    };
+
     struct IWalletDB;
 
     struct ShieldedCoin
@@ -471,6 +485,7 @@ namespace beam::wallet
         // /////////////////////////////////////////////
         // Transaction management
         virtual void visitTx(std::function<bool(TxType, TxStatus, Asset::ID, Height)> filter, std::function<void(const TxDescription&)> func) const = 0;
+        virtual void visitTx(std::function<bool(const TxDescription&)> func, const TxListFilter& filter) const = 0;
         virtual std::vector<TxDescription> getTxHistory(wallet::TxType txType = wallet::TxType::Simple, uint64_t start = 0, int count = std::numeric_limits<int>::max()) const = 0;
         virtual boost::optional<TxDescription> getTx(const TxID& txId) const = 0;
         virtual void saveTx(const TxDescription& p) = 0;
@@ -643,6 +658,7 @@ namespace beam::wallet
         void rollbackConfirmedShieldedUtxo(Height minHeight) override;
 
         void visitTx(std::function<bool(TxType, TxStatus, Asset::ID, Height)> filter, std::function<void(const TxDescription&)> func) const override;
+        void visitTx(std::function<bool(const TxDescription&)> func, const TxListFilter& filter) const override;
         std::vector<TxDescription> getTxHistory(wallet::TxType txType, uint64_t start, int count) const override;
         boost::optional<TxDescription> getTx(const TxID& txId) const override;
         void saveTx(const TxDescription& p) override;
@@ -756,6 +772,7 @@ namespace beam::wallet
         // Cache for optimized access for database fields
         using ParameterCache = std::map<TxID, std::map<SubTxID, std::map<TxParameterID, boost::optional<ByteBuffer>>>>;
 
+        void insertParameterToCache(const TxID& txID, SubTxID subTxID, TxParameterID paramID, const boost::optional<ByteBuffer>& blob);
         void insertParameterToCache(const TxID& txID, SubTxID subTxID, TxParameterID paramID, const boost::optional<ByteBuffer>& blob) const;
         void deleteParametersFromCache(const TxID& txID);
         bool hasTransaction(const TxID& txID) const;

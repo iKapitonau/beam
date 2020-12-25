@@ -30,8 +30,10 @@
 #include "keykeeper/local_private_key_keeper.h"
 #include "strings_resources.h"
 #include "core/uintBig.h"
+#include "utility/test_helpers.h"
 #include <queue>
 #include <unordered_map>
+#include <boost/algorithm/string.hpp>
 
 #define NOSEP
 #define COMMA ", "
@@ -90,6 +92,7 @@
 #define VOUCHERS_NAME "vouchers"
 #define COIN_CONFIRMATIONS_COUNT "confirmations_count"
 #define EVENTS_NAME "events"
+#define TX_LIST_FILTER_NAME "txfilter"
 
 #define ENUM_VARIABLES_FIELDS(each, sep, obj) \
     each(name,  name,  TEXT UNIQUE, obj) sep \
@@ -216,6 +219,18 @@
     each(Key,     Key,    BLOB NOT NULL, obj)
 
 #define EVENTS_FIELDS ENUM_EVENTS_FIELDS(LIST, COMMA, )
+
+#define ENUM_TX_FILTER_FIELDS(each, sep, obj) \
+    each(TxID,                  TxID,                   BLOB NOT NULL PRIMARY KEY, obj) sep \
+    each(CreateTime,            CreateTime,             INTEDER, obj) sep \
+    each(TransactionType,       TransactionType,        INTEGER, obj) sep \
+    each(Status,                Status,                 INTEGER, obj) sep \
+    each(AssetID,               AssetID,                INTEGER, obj) sep \
+    each(AssetConfirmedHeight,  AssetConfirmedHeight,   INTEGER, obj) sep \
+    each(KernelProofHeight,     KernelProofHeight,      INTEGER, obj) 
+
+
+#define TX_FILTER_FIELDS ENUM_TX_FILTER_FIELDS(LIST, COMMA, )
 
 namespace std
 {
@@ -946,7 +961,8 @@ namespace beam::wallet
         const char* kMaxPrivacyLockTimeLimitHours = "MaxPrivacyLockTimeLimitHours";
         const uint8_t kDefaultMaxPrivacyLockTimeLimitHours = 72;
         const int BusyTimeoutMs = 5000;
-        const int DbVersion   = 28;
+        const int DbVersion   = 29;
+        const int DbVersion28 = 28;
         const int DbVersion27 = 27;
         const int DbVersion26 = 26;
         const int DbVersion25 = 25;
@@ -1224,6 +1240,90 @@ namespace beam::wallet
                 "CREATE INDEX EventsKeyIndex ON " EVENTS_NAME "(Key);";
             const auto ret = sqlite3_exec(db, req, nullptr, nullptr, nullptr);
             throwIfError(ret, db);
+        }
+
+        void CreateTxFilterTable(sqlite3* db)
+        {
+            assert(db != nullptr);
+            const char* req = "CREATE TABLE " TX_LIST_FILTER_NAME " (" ENUM_TX_FILTER_FIELDS(LIST_WITH_TYPES, COMMA, ) ");";
+#define STR(s) #s 
+#define MACRO(id, type) "CREATE INDEX " STR(id##Index) " ON " TX_LIST_FILTER_NAME "(" #id ");"
+                BEAM_TX_LIST_FILTER_MAP(MACRO)
+#undef MACRO
+#undef STR
+                ;
+            const auto ret = sqlite3_exec(db, req, nullptr, nullptr, nullptr);
+            throwIfError(ret, db);
+        }
+
+        void MigrateFrom28(const WalletDB* walletDB, sqlite3* db)
+        {
+            CreateTxFilterTable(db);
+            {
+                sqlite::Statement stm(walletDB, "SELECT txID, paramID, value FROM " TX_PARAMS_NAME " WHERE (paramID=?1 OR paramID=?2 OR paramID=?3 OR paramID=?4 OR paramID=?5 OR paramID=?6) AND subTxID=?7;");
+                stm.bind(1, TxParameterID::CreateTime);
+                int colIdx = 2;
+                #define MACRO(id, type) stm.bind(colIdx++, TxParameterID::id);
+                BEAM_TX_LIST_FILTER_MAP(MACRO)
+                #undef MACRO
+                stm.bind(7, kDefaultSubTxID);
+
+                TxID txID;
+                ByteBuffer buffer;
+                int p;
+
+                sqlite::Statement stm2(walletDB, "INSERT OR IGNORE INTO " TX_LIST_FILTER_NAME " (TxID) VALUEs(?);");
+                sqlite::Statement stmCreateTime(walletDB, "UPDATE " TX_LIST_FILTER_NAME " set CreateTime=?1 WHERE TxID=?2;");
+                #define MACRO(id, type) sqlite::Statement stm##id(walletDB, "UPDATE " TX_LIST_FILTER_NAME " set " #id "=?1 WHERE TxID=?2;");
+                BEAM_TX_LIST_FILTER_MAP(MACRO)
+                #undef MACRO
+
+                while (stm.step())
+                {
+                    stm.get(0, txID);
+                    stm.get(1, p);
+                    stm.get(2, buffer);
+                    auto paramID = static_cast<TxParameterID>(p);
+
+                    stm2.Reset();
+                    stm2.bind(1, txID);
+                    stm2.step();
+
+                    switch (paramID)
+                    {
+                    case beam::wallet::TxParameterID::CreateTime:
+                        {
+                            Timestamp value;
+                            if (fromByteBuffer<Timestamp>(buffer, value))
+                            {
+                                stmCreateTime.Reset();
+                                stmCreateTime.bind(1, value);
+                                stmCreateTime.bind(2, txID);
+                                stmCreateTime.step();
+                            }
+                        }
+                        break;
+                    #define MACRO(id, type) \
+                    case beam::wallet::TxParameterID::id: \
+                    { \
+                        type value; \
+                        if (fromByteBuffer<type>(buffer, value)) \
+                        { \
+                            stm##id.Reset(); \
+                            stm##id.bind(1, value); \
+                            stm##id.bind(2, txID); \
+                            stm##id.step(); \
+                        } \
+                    } \
+                    break; 
+                    BEAM_TX_LIST_FILTER_MAP(MACRO)
+                    #undef MACRO
+
+                    default:
+                        break;
+                    }
+                }
+            }
         }
 
         void MigrateAssetsFrom20(sqlite3* db)
@@ -1524,6 +1624,7 @@ namespace beam::wallet
         CreateVouchersTable(db);
         CreateExchangeRatesHistoryTable(db);
         CreateEventsTable(db);
+        CreateTxFilterTable(db);
     }
 
     std::shared_ptr<WalletDB> WalletDB::initBase(const string& path, const SecString& password, bool separateDBForPrivateData)
@@ -2020,6 +2121,12 @@ namespace beam::wallet
                 case DbVersion27:
                     LOG_INFO() << "Converting DB from format 27...";
                     CreateEventsTable(walletDB->_db);
+                    // no break
+
+                case DbVersion28:
+                    LOG_INFO() << "Converting DB from format 28...";
+                    MigrateFrom28(walletDB.get(), walletDB->_db);
+                    // no break
 
                     storage::setVar(*walletDB, Version, DbVersion);
                     // no break
@@ -3379,6 +3486,9 @@ namespace beam::wallet
             Asset::ID m_AssetID;
         };
 
+        helpers::StopWatch sw;
+        sw.start();
+
         std::unordered_map<TxID, TxData2> transactions2;
 
         auto pred = [](const TxData& left, const TxData& right) {return left.second < right.second; };
@@ -3452,8 +3562,7 @@ namespace beam::wallet
             }
         }
 
-        const char* gtParamReq = "SELECT * FROM " TX_PARAMS_NAME " WHERE txID=?1;";
-        sqlite::Statement stm2(this, gtParamReq);
+        sqlite::Statement stm2(this, "SELECT * FROM " TX_PARAMS_NAME " WHERE txID=?1;");
 
         while (!transactions.empty())
         {
@@ -3472,6 +3581,52 @@ namespace beam::wallet
                 func(*t);
             }
         }
+
+        sw.stop();
+        cout << "visitTx  elapsed time: " << sw.milliseconds() << " ms\n";
+    }
+
+    void WalletDB::visitTx(std::function<bool(const TxDescription&)> func, const TxListFilter& filter) const
+    {
+        helpers::StopWatch sw;
+        sw.start();
+        ///
+        std::string query = "SELECT TxID FROM " TX_LIST_FILTER_NAME " WHERE ";
+        std::vector<std::string> parts;
+
+        #define MACRO(id, type) \
+        if (filter.m_##id) \
+        { \
+            std::string q(#id "="); \
+            q.append(std::to_string((int)*filter.m_##id)); \
+            parts.push_back(std::move(q)); \
+        } 
+        BEAM_TX_LIST_FILTER_MAP(MACRO)
+        #undef MACRO
+
+        query.append(boost::join(parts, " AND "))
+             .append(" ORDER BY CreateTime DESC");
+
+        sqlite::Statement stm(this, query.c_str());
+        sqlite::Statement stm2(this, "SELECT * FROM " TX_PARAMS_NAME " WHERE txID=?1;");
+        TxID txID;
+        while (stm.step())
+        {
+            stm.get(0, txID);
+
+            auto t = getTxImpl(txID, stm2);
+            if (t.is_initialized())
+            {
+                if (!func(*t))
+                {
+                    break;
+                }
+            }
+        }
+
+        /// 
+        sw.stop();
+        cout << "visitTx  elapsed time: " << sw.milliseconds() << " ms\n";
     }
 
     vector<TxDescription> WalletDB::getTxHistory(wallet::TxType txType, uint64_t start, int count) const
@@ -4622,6 +4777,51 @@ namespace beam::wallet
         return res;
     }
 
+    void WalletDB::insertParameterToCache(const TxID& txID, SubTxID subTxID, TxParameterID paramID, const boost::optional<ByteBuffer>& blob)
+    {
+        m_TxParametersCache[txID][subTxID][paramID] = blob;
+        if (subTxID == kDefaultSubTxID && !memis0(txID.data(), sizeof(TxID)))
+        {
+            sqlite::Statement stm2(this, "INSERT OR IGNORE INTO " TX_LIST_FILTER_NAME " (TxID) VALUES(?);");
+            stm2.bind(1, txID);
+            stm2.step();
+
+            switch (paramID)
+            {
+            case TxParameterID::CreateTime:
+                {
+                    Timestamp value;
+                    if (fromByteBuffer<Timestamp>(*blob, value))
+                    {
+                        sqlite::Statement stm(this, "UPDATE " TX_LIST_FILTER_NAME " SET CreateTime=?1 WHERE TxID=?2;");
+                        stm.bind(1, value);
+                        stm.bind(2, txID);
+                        stm.step();
+                    }
+                }
+                break;
+            #define MACRO(id, type) \
+            case TxParameterID::id: \
+                { \
+                    type value; \
+                    if (fromByteBuffer<type>(*blob, value)) \
+                    { \
+                        sqlite::Statement stm(this, "UPDATE " TX_LIST_FILTER_NAME " SET " #id "=?1 WHERE TxID=?2;"); \
+                        stm.bind(1, value); \
+                        stm.bind(2, txID); \
+                        stm.step(); \
+                    } \
+                } \
+                break;
+            BEAM_TX_LIST_FILTER_MAP(MACRO)
+            #undef MACRO
+
+            default:
+                break;
+            }
+        }
+    }
+
     void WalletDB::insertParameterToCache(const TxID& txID, SubTxID subTxID, TxParameterID paramID, const boost::optional<ByteBuffer>& blob) const
     {
         m_TxParametersCache[txID][subTxID][paramID] = blob;
@@ -4630,6 +4830,11 @@ namespace beam::wallet
     void WalletDB::deleteParametersFromCache(const TxID& txID)
     {
         m_TxParametersCache.erase(txID);
+        {
+            sqlite::Statement stm(this, "DELETE FROM " TX_LIST_FILTER_NAME " WHERE TxID=?1;");
+            stm.bind(1, txID);
+            stm.step();
+        }
     }
 
     bool WalletDB::hasTransaction(const TxID& txID) const

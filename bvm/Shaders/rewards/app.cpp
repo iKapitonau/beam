@@ -1,27 +1,13 @@
 #include "Shaders/common.h"
 #include "contract.h"
 
-#include <string>
-#include <unordered_map>
+#include <algorithm>
+#include <utility>
+#include <vector>
 
-enum Action {
-	CREATE_CONTRACT,
-	DESTROY_CONTRACT,
-	INVALID_ACTION,
-	TAKE_FREE_TOKENS,
-	GIVE_REWARDS,
-	SHOW_REWARDS,
-};
+#define ACTION_SIZE	16
 
-static const size_t ACTION_SIZE = 16;
-
-static std::unordered_map<const char*, Action> VALID_ACTIONS = {
-	{"create_contract", CREATE_CONTRACT},
-	{"destroy_contract", DESTROY_CONTRACT},
-	{"take_free_tokens", TAKE_FREE_TOKENS},
-	{"give_rewards", GIVE_REWARDS},
-	{"show_rewards", SHOW_REWARDS},
-};
+using Action_func_t = void (*)(const ContractID&);
 
 void OnError(const char* msg)
 {
@@ -33,13 +19,18 @@ void DeriveMyPk(PubKey& pubKey, const ContractID& cid)
     Env::DerivePk(pubKey, &cid, sizeof(cid));
 }
 
-void On_action_create_contract(const Height& free_tokens_period, const Height& free_tokens_amount, const Amount& max_reward, const ContractID& cid)
+void On_action_create_contract(const ContractID& cid)
 {
 	Rewards::Params pars;
-	pars.free_tokens_period = free_tokens_period;
-	pars.free_tokens_amount = free_tokens_amount;
-	pars.max_reward = max_reward;
-	Env::GenerateKernel(nullptr, pars.METHOD, &pars, sizeof(pars), nullptr, 0, nullptr, 0, "create Rewards contract", 0);
+	Env::DocGet("free_tokens_period", pars.free_tokens_period);
+	Env::DocGet("free_tokens_amount", pars.free_tokens_amount);
+	Env::DocGet("max_reward", pars.max_reward);
+
+//	FundsChange fc;
+//	fc.m_Aid = 0;
+//	fc.m_Amount = 5000000000ll;
+//	fc.m_Consume = 1;
+	Env::GenerateKernel(nullptr, pars.METHOD, &pars, sizeof(pars), nullptr, 0, /*&fc, 1,*/ nullptr, 0, "create Rewards contract", 0);
 }
 
 void On_action_destroy_contract(const ContractID& cid)
@@ -95,40 +86,28 @@ export void Method_0()
 
 export void Method_1()
 {
+	const std::vector<std::pair<const char *, Action_func_t>> VALID_ACTIONS = {
+		{"create_contract", On_action_create_contract},
+		{"destroy_contract", On_action_destroy_contract},
+		{"take_free_tokens", On_action_take_free_tokens},
+		//{"give_rewards", On_action_give_rewards},
+		{"show_rewards", On_action_show_rewards},
+	};
+
 	char action[ACTION_SIZE];
 
 	if (!Env::DocGetText("action", action, sizeof(action)))
 		return OnError("Action not specified");
 
-	Action action_id = (VALID_ACTIONS.find(action) == VALID_ACTIONS.end() ?
-		Action::INVALID_ACTION : VALID_ACTIONS[action]);
+	auto it = std::find_if(VALID_ACTIONS.begin(), VALID_ACTIONS.end(), [&action](const auto& p) {
+		return !strcmp(action, p.first);
+	});
 
-	ContractID cid;
-	Env::DocGet("cid", cid); 
-	switch(action_id) {
-		case Action::CREATE_CONTRACT: {
-			Height free_tokens_period;
-			Env::DocGet("free_tokens_period", free_tokens_period);
-			Amount free_tokens_amount;
-			Env::DocGet("free_tokens_amount", free_tokens_amount);
-			Amount max_reward;
-			Env::DocGet("max_reward", max_reward);
-			On_action_create_contract(free_tokens_period, free_tokens_amount, max_reward, cid);
-			break;
-		}
-		case Action::DESTROY_CONTRACT:
-			On_action_destroy_contract(cid);
-			break;
-		case Action::TAKE_FREE_TOKENS:
-			On_action_take_free_tokens(cid);
-			break;
-		case Action::GIVE_REWARDS:
-			break;
-		case Action::SHOW_REWARDS: {
-			On_action_show_rewards(cid);
-			break;
-		}
-		default:
-			return OnError("invalid Action");
+	if (it != VALID_ACTIONS.end()) {
+		ContractID cid;
+		Env::DocGet("cid", cid); 
+		it->second(cid);
+	} else {
+		OnError("invalid Action");
 	}
 }

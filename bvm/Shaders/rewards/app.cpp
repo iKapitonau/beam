@@ -31,7 +31,7 @@ void On_action_create_contract(const ContractID& unused)
 	fc.m_Aid = 0;
 	fc.m_Amount = 3000 * 100000000ll;
 	fc.m_Consume = 1;
-	Env::GenerateKernel(nullptr, pars.METHOD, &pars, sizeof(pars), &fc, 1, nullptr, 0, "create Rewards contract", 0);
+	Env::GenerateKernel(nullptr, pars.METHOD, &pars, sizeof(pars), &fc, 1, nullptr, 0, "Create Rewards contract", 0);
 }
 
 void On_action_destroy_contract(const ContractID& cid)
@@ -41,7 +41,7 @@ void On_action_destroy_contract(const ContractID& cid)
 	fc.m_Amount = 3000 * 100000000ll;
 	fc.m_Consume = 0;
 
-	Env::GenerateKernel(&cid, 1, nullptr, 0, &fc, 1, nullptr, 0, "destroy Rewards contract", 0);
+	Env::GenerateKernel(&cid, 1, nullptr, 0, &fc, 1, nullptr, 0, "Destroy Rewards contract", 0);
 }
 
 void On_action_view_contracts(const ContractID& unused)
@@ -57,7 +57,7 @@ void On_action_view_params(const ContractID& cid)
 
 	Rewards::Params pars;
 	if (!Env::VarReader::Read_T(k, pars))
-		return OnError("failed to read");
+		return OnError("Failed to read contract's initial params");
 
 	Env::DocGroup gr("params");
 	Env::DocAddNum("free_tokens_period", pars.free_tokens_period);
@@ -74,7 +74,7 @@ void On_action_take_free_tokens(const ContractID& cid)
 
 	Rewards::Params initial_params;
 	if (!Env::VarReader::Read_T(k, initial_params))
-		return OnError("failed to read initial params");
+		return OnError("Failed to read contract's initial params");
 
 	Rewards::TakeFreeTokensParams params;
 	DeriveMyPk(params.receiver, cid);
@@ -88,7 +88,7 @@ void On_action_take_free_tokens(const ContractID& cid)
 	fc.m_Aid = initial_params.aid;
 	fc.m_Consume = 0;
 
-	Env::GenerateKernel(&cid, Rewards::TakeFreeTokensParams::METHOD, &params, sizeof(params), &fc, 1, &sig, 1, "take free tokens from rewards contract", 0);
+	Env::GenerateKernel(&cid, Rewards::TakeFreeTokensParams::METHOD, &params, sizeof(params), &fc, 1, &sig, 1, "Take free tokens from rewards contract", 0);
 }
 
 void On_action_show_rewards(const ContractID& cid)
@@ -102,7 +102,7 @@ void On_action_show_rewards(const ContractID& cid)
 
 	Rewards::Params initial_params;
 	if (!Env::VarReader::Read_T(k, initial_params))
-		return OnError("failed to read initial params");
+		return OnError("Failed to read contract's initial params");
 
 	Env::KeyPrefix k0, k1;
 	k0.m_Cid = cid;
@@ -121,11 +121,11 @@ void On_action_show_rewards(const ContractID& cid)
 
 		Env::DocGroup gr("");
 
-		Env::DocAddBlob_T("Account", key.m_KeyInContract);
+		Env::DocAddBlob_T("account", key.m_KeyInContract);
 		Env::DocAddNum("rewards", d.rewards);
 		Env::DocAddNum("balance", d.balance);
 		Env::DocAddNum("pending_rewards", d.pending_rewards);
-		Env::DocAddNum("h0", d.last_time_received);
+		Env::DocAddNum("last_time_received", d.last_time_received);
 	}
 }
 
@@ -136,7 +136,7 @@ void On_action_give_rewards(const ContractID& cid)
 	k.m_KeyInContract = 0;
 	Rewards::Params initial_params;
 	if (!Env::VarReader::Read_T(k, initial_params))
-		return OnError("failed to read initial params");
+		return OnError("Failed to read contract's initial params");
 
 	Rewards::GiveRewardsParams pars;
 	Env::DocGetBlob("receiver", &pars.receiver, sizeof(pars.receiver));
@@ -155,7 +155,7 @@ void On_action_give_rewards(const ContractID& cid)
 	sig.m_pID = &cid;
 	sig.m_nID = sizeof(cid);
 
-	Env::GenerateKernel(&cid, Rewards::GiveRewardsParams::METHOD, &pars, sizeof(pars), &fc, 1, &sig, 1, "give rewards tokens", 0);
+	Env::GenerateKernel(&cid, Rewards::GiveRewardsParams::METHOD, &pars, sizeof(pars), &fc, 1, &sig, 1, "Give rewards tokens", 0);
 }
 
 void On_action_get_my_pkey(const ContractID& cid)
@@ -172,7 +172,7 @@ void On_action_take_pending_rewards(const ContractID& cid)
 	k.m_KeyInContract = 0;
 	Rewards::Params initial_params;
 	if (!Env::VarReader::Read_T(k, initial_params))
-		return OnError("failed to read initial params");
+		return OnError("Failed to read contract's initial params");
 
 	Rewards::TakePendingRewards pars;
 	DeriveMyPk(pars.account, cid);
@@ -190,7 +190,7 @@ void On_action_take_pending_rewards(const ContractID& cid)
 		return OnError("No pending rewards");
 	}
 
-	Env::GenerateKernel(&cid, Rewards::TakePendingRewards::METHOD, &pars, sizeof(pars), nullptr, 0, nullptr, 0, "take pending rewards", 0);
+	Env::GenerateKernel(&cid, Rewards::TakePendingRewards::METHOD, &pars, sizeof(pars), nullptr, 0, nullptr, 0, "Take pending rewards", 0);
 }
 
 export void Method_0()
@@ -264,6 +264,6 @@ export void Method_1()
 		Env::DocGet("cid", cid); 
 		it->second(cid);
 	} else {
-		OnError("invalid Action");
+		OnError("Invalid action");
 	}
 }

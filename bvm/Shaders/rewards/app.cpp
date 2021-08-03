@@ -143,9 +143,8 @@ void On_action_give_rewards(const ContractID& cid)
 	DeriveMyPk(pars.sender, cid);
 	Env::DocGetNum64("amount", &pars.amount);
 
-	// TODO
-	//if (pars.receiver == pars.sender)
-		//return OnError("unable to send rewards to yourself");
+	if (!Env::Memcmp(&pars.receiver, &pars.sender, sizeof(pars.receiver)))
+		return OnError("Unable to send rewards to yourself!");
 
 	FundsChange fc;
 	fc.m_Amount = pars.amount;

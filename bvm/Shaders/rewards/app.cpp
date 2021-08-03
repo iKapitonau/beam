@@ -146,6 +146,9 @@ void On_action_give_rewards(const ContractID& cid)
 	if (!Env::Memcmp(&pars.receiver, &pars.sender, sizeof(pars.receiver)))
 		return OnError("Unable to send rewards to yourself!");
 
+	if (pars.amount > initial_params.max_reward)
+		return OnError("Amount must be less than max_reward param");
+
 	FundsChange fc;
 	fc.m_Amount = pars.amount;
 	fc.m_Aid = initial_params.aid;
